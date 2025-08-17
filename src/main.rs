@@ -1,91 +1,67 @@
 use walkdir::WalkDir;
-use std::io::{self, Write};
+use std::io;
 use std::time::Instant;
 
-fn walk(min_size: u64) {
-    let mut error_count = 0;
-    let mut files_found = 0;
-
-    for entry in WalkDir::new(".") {
-        match entry {
-            Ok(entry) => {
-                if entry.file_type().is_file() {
-                    match entry.metadata() {
-                        Ok(metadata) => {
-                            let size = metadata.len();
-                            if size > min_size {
-                                println!("File: {} (Size: {} bytes)", entry.path().display(), size);
-                                files_found += 1;
-                            }
-                        }
-                        Err(e) => {
-                            error_count += 1;
-                            eprintln!("Metadata error #{}: {} for {}", error_count, e, entry.path().display());
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                error_count += 1;
-                eprintln!("Entry error #{}: {}", error_count, e);
-            }
+fn walk(path:&str,min_size: u64) {
+    for entry in WalkDir::new(path){
+        let entry = match entry{
+            Ok(e)=>e,
+            Err(e)=> {print!("Error while reading : {} ",e); continue;}
+        };
+        if !entry.file_type().is_file(){
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => { println!("Error reading metadata: {}", e); continue; }
+        };
+        if metadata.len() > min_size {
+            println!("File larger than {} bytes: {:?}", min_size, entry.path());
         }
     }
-
-    println!("\nFound {} file(s) larger than {} bytes", files_found, min_size);
 }
 
 
 fn main() {
-    print!("Enter the size of the files you want to filter: ");
-    io::stdout().flush().unwrap();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read input");
-
-    let input = input.trim();
-
-    let num_part:String = input.chars().take_while(|c| c.is_numeric()).collect();
-    let char_part:String = input.chars().skip_while(|c| c.is_numeric()).collect();
-
-    if num_part.is_empty() {
-        println!("Error: No number provided");
+    
+    println!("Enter a the Director Path:");
+    let mut path = String::new();
+    io::stdin().read_line(&mut path).expect("Falied to read the path");
+    let path = path.trim();
+    if !std::path::Path::new(path).exists() {
+        println!("Error: Directory '{}' does not exist", path);
         return;
     }
 
-    let num_value: u64 = match num_part.parse() {
-        Ok(val) => val,
-        Err(_) => {
-            println!("Error: Invalid number");
-            return;
-        }
+    println!("Enter the size (eg:10Gb,20Mb,500Kb) : ");
+    let mut input_size = String::new();
+
+    io::stdin().read_line(&mut input_size).expect("Error Reading the size");
+    let num_part: String = input_size.chars().take_while(|c| c.is_numeric()).collect();
+    let unit_part: String = input_size.chars().skip_while(|c| c.is_numeric()).collect();
+    let unit_part = unit_part.trim();
+
+    let number:u64 = match num_part.parse() {
+        Ok(n) => n,
+        Err(_)=>{println!("Error : Invalid Number"); return;}
+        
     };
-
-
-    println!("Number : {}",num_part);
-    println!("Number : {}",char_part);
-    
-    let size = match char_part.as_str() {
-        "Gb" => num_value * 1024 * 1024 * 1024,
-        "Mb" => num_value * 1024 * 1024 ,
-        "Kb" => num_value * 1024,
-        _=>{
-            println!("Error Invalid unit");
-            return;
-        }
-
-    };
-    println!("Size : {}",size);
-
     let start = Instant::now();
-    
-    println!("Directory Walking:");
-    walk(size);
+    let size = match unit_part.to_lowercase().as_str(){
+        "gb" => number*1024*1024*1024,
+        "mb" => number*1024*1024,
+        "kb" => number*1024,
+        "" => number,
+        _ => {
+            println!("Error Invalid Unit");
+            return;
+        }
+    };
 
+    walk(path, size);
     let duration = start.elapsed();
     println!(
         "Time taken: {:.2?} seconds",
         duration
     );
-    
 }
