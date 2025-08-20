@@ -1,17 +1,14 @@
 use walkdir::WalkDir;
 use std::io;
 use std::time::Instant;
-use std::fs::File;
-use std::io::ErrorKind;
+
 
 fn walk(path:&str,min_size: u64) {
-    let mut file_num = 0;
     let mut files_scanned = 0;
     let mut permission_denied = 0;
     let mut other_errors = 0;
     let mut found_files: Vec<(std::path::PathBuf, u64)> = Vec::new();
 
-    
     for entry in WalkDir::new(path){
         let entry = match entry{
             Ok(e)=>e,
@@ -39,12 +36,43 @@ fn walk(path:&str,min_size: u64) {
         files_scanned += 1;
         let metadata = match entry.metadata() {
             Ok(m) => m,
-            Err(_) => continue,
+            Err(e) => {
+                if let Some(io_err) = e.io_error() {
+                    match io_err.kind() {
+                        std::io::ErrorKind::PermissionDenied => {
+                            permission_denied += 1;
+                        }
+                        _ => {
+                            other_errors += 1;
+                        }
+                    }
+                } else {
+                    other_errors += 1;
+                }
+                continue;
+            }
         };
+
         if metadata.len() > min_size {
-            println!("File larger than {} bytes: {:?}", min_size, entry.path());
+            found_files.push((entry.path().to_path_buf(),metadata.len()));
         }
     }
+
+    if found_files.is_empty() {
+        println!("No files larger than {} bytes found.", min_size);
+        return;
+    }else {
+        println!("Found {} large files out of {} scanned:",found_files.len(),files_scanned);
+        for (path,size) in &found_files {
+            println!("  - {} ({} bytes)", path.display(), size);
+        }
+    }
+
+    println!("===== Final Scan Statistic  =====");
+    println!("Files Scanned:                {}",files_scanned);
+    println!("Permission Denied:            {}",permission_denied);
+    println!("Other Errors:                 {}",other_errors);
+    println!("Files Found:                  {}",found_files.len());
 }
 
 fn main() {
