@@ -1,7 +1,15 @@
 use walkdir::WalkDir;
-use std::io;
+use std::fs::{self, create_dir, File};
+use std::{io, path::Path};
 use std::time::Instant;
+use serde::{Deserialize, Serialize};
+use serde_json;
 
+#[derive(Serialize, Deserialize, Debug)]
+struct Fileinfo{
+    path:String,
+    size:u64,
+}
 
 fn walk(path:&str,min_size: u64) {
     let mut files_scanned = 0;
@@ -58,6 +66,14 @@ fn walk(path:&str,min_size: u64) {
         }
     }
 
+    let file_cache : Vec<Fileinfo> = found_files
+    .iter()
+    .map(|(path,size)| Fileinfo{
+        path : path.display().to_string(),
+        size:*size
+    }) 
+    .collect();
+
     if found_files.is_empty() {
         println!("No files larger than {} bytes found.", min_size);
         return;
@@ -66,6 +82,17 @@ fn walk(path:&str,min_size: u64) {
         for (path,size) in &found_files {
             println!("  - {} ({} bytes)", path.display(), size);
         }
+    }
+    match serde_json::to_string_pretty(&file_cache) {
+        Ok(json_string) => {
+            if let Err(e) = fs::write("cache.json", json_string){
+                println!("Error writing to the cache file : {}",e)
+            }
+        }
+        Err(e)=>{
+            println!("Error while Converting to Json : {}",e)
+        }
+        
     }
 
     println!("===== Final Scan Statistic  =====");
@@ -76,7 +103,11 @@ fn walk(path:&str,min_size: u64) {
 }
 
 fn main() {
-    
+    let filename:&str ="cache.json";
+    if !Path::new(filename).exists() {
+        File::create(filename).expect("Falied to create a file!");
+    }
+
     println!("Enter a the Director Path:");
     let mut path = String::new();
     io::stdin().read_line(&mut path).expect("Falied to read the path");
