@@ -1,17 +1,49 @@
 use walkdir::WalkDir;
-use std::fs::{self, create_dir, File};
-use std::{io, path::Path};
-use std::time::Instant;
+use std::fs::{self, metadata, File};
+use std::{io::{self, BufReader}, path::Path};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use serde_json;
+use tempfile::NamedTempFile;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Fileinfo{
     path:String,
     size:u64,
+    date_modifed:u64,
+}
+type CacheData = Vec<Fileinfo>;
+
+fn get_file_time(path: &Path) -> Result<u64, std::io::Error> {
+    let m = fs::metadata(path)?; 
+    let modified: SystemTime = m.modified()?; 
+    Ok(modified.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs())
 }
 
-fn walk(path:&str,min_size: u64) {
+fn load_cache(cache_file: &str) -> Result<CacheData,Box<dyn std::error::Error>>{
+    let file = File::open(cache_file)?;
+    let r = BufReader::new(file);
+    Ok(serde_json :: from_reader(r)?)
+}
+
+fn save_cache(cache_file: &str, files: &[Fileinfo]) -> io::Result<()> {
+    let mut temp = NamedTempFile::new()?;
+    serde_json::to_writer_pretty(&mut temp, files)?;
+    temp.persist(cache_file)
+        .map_err(|e| e.error)?; 
+    println!("Cache updated with {} files", files.len());
+    Ok(())
+}
+fn is_file_uptodate(cached_file : &Fileinfo) -> bool{
+    let path = Path::new(&cached_file.path);
+
+    match get_file_time(path) {
+        Ok(modifie) => modifie == cached_file.date_modifed,
+        Err(_) => false,
+    }
+} 
+
+fn walk(path:&str,min_size: u64,cache_file: &str) {
     let mut files_scanned = 0;
     let mut permission_denied = 0;
     let mut other_errors = 0;
@@ -40,7 +72,6 @@ fn walk(path:&str,min_size: u64) {
         if !entry.file_type().is_file(){
             continue;
         }
-        
         files_scanned += 1;
         let metadata = match entry.metadata() {
             Ok(m) => m,
@@ -66,14 +97,6 @@ fn walk(path:&str,min_size: u64) {
         }
     }
 
-    let file_cache : Vec<Fileinfo> = found_files
-    .iter()
-    .map(|(path,size)| Fileinfo{
-        path : path.display().to_string(),
-        size:*size
-    }) 
-    .collect();
-
     if found_files.is_empty() {
         println!("No files larger than {} bytes found.", min_size);
         return;
@@ -83,18 +106,6 @@ fn walk(path:&str,min_size: u64) {
             println!("  - {} ({} bytes)", path.display(), size);
         }
     }
-    match serde_json::to_string_pretty(&file_cache) {
-        Ok(json_string) => {
-            if let Err(e) = fs::write("cache.json", json_string){
-                println!("Error writing to the cache file : {}",e)
-            }
-        }
-        Err(e)=>{
-            println!("Error while Converting to Json : {}",e)
-        }
-        
-    }
-
     println!("===== Final Scan Statistic  =====");
     println!("Files Scanned:                {}",files_scanned);
     println!("Permission Denied:            {}",permission_denied);
@@ -104,9 +115,6 @@ fn walk(path:&str,min_size: u64) {
 
 fn main() {
     let filename:&str ="cache.json";
-    if !Path::new(filename).exists() {
-        File::create(filename).expect("Falied to create a file!");
-    }
 
     println!("Enter a the Director Path:");
     let mut path = String::new();
@@ -130,7 +138,7 @@ fn main() {
         Err(_)=>{println!("Error : Invalid Number"); return;}
         
     };
-    let start = Instant::now();
+    
     let size = match unit_part.to_lowercase().as_str(){
         "gb" => number*1024*1024*1024,
         "mb" => number*1024*1024,
@@ -142,10 +150,8 @@ fn main() {
         }
     };
 
-    walk(path, size);
+    let start = Instant::now();
+    walk(path, size,filename);
     let duration = start.elapsed();
-    println!(
-        "Time taken: {:.2?} seconds",
-        duration
-    );
+    println!("Time taken: {:.2?} seconds",duration);
 }
