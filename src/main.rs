@@ -1,5 +1,6 @@
 use walkdir::WalkDir;
 use std::fs::{self, File};
+use std::io::Read;
 use std::{io::{self, BufReader}, path::Path};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
@@ -44,7 +45,7 @@ fn is_file_uptodate(cached_file : &Fileinfo) -> bool{
     }
 } 
 
-fn walk(path:&str,min_size: u64,cache_file: &str) {
+fn walk(path:&str,search_file:&str,cache_file: &str) {
     let mut files_scanned = 0;
     let mut permission_denied = 0;
     let mut other_errors = 0;
@@ -56,7 +57,8 @@ fn walk(path:&str,min_size: u64,cache_file: &str) {
 
     let mut cachemap: std::collections::HashMap<String,Fileinfo> = cache.into_iter().map(|f| (f.path.clone(),f)).collect();
     let mut current = Vec::new();
-
+    let mut updated_cache_entries:Vec<Fileinfo> = Vec::new();
+    
     print!("Scanning .......... ");
 
     for entry in WalkDir::new(path){
@@ -84,15 +86,19 @@ fn walk(path:&str,min_size: u64,cache_file: &str) {
         }
         files_scanned += 1;
         let pathz = entry.path().display().to_string();
-
-        if let Some(cache_filed) = cachemap.get(&pathz) {
-            if is_file_uptodate(cache_filed) {
-                if cache_filed.size >= min_size {
-                    current.push(cache_filed.clone());
-                }
-                continue;
+        
+        if let Some(cached_file) = cachemap.get(&pathz) {
+        if is_file_uptodate(cached_file) {
+            updated_cache_entries.push(cached_file.clone());
+            if entry.file_name().to_string_lossy() == search_file {
+                current.push(cached_file.clone());
             }
+            continue;
+        } else {
+            cachemap.remove(&pathz);
         }
+    }
+
         let metadata = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
@@ -112,31 +118,31 @@ fn walk(path:&str,min_size: u64,cache_file: &str) {
             }
         };
 
-        if metadata.len() >= min_size {
-            if let Ok(date_modified) = get_file_time(entry.path()) {
-                let file_info = Fileinfo {
-                    path: pathz.clone(),
-                    size: metadata.len(),
-                    date_modified,
-                };
-                current.push(file_info.clone());
-                cachemap.insert(pathz, file_info);
+        if let Ok(date_modified) = get_file_time(entry.path()) {
+            let file_info = Fileinfo {
+                path: pathz.clone(),
+                size: metadata.len(),
+                date_modified,
+            };
+            updated_cache_entries.push(file_info.clone());
+            cachemap.insert(pathz.clone(), file_info.clone());
+            if entry.file_name().to_string_lossy() == search_file {
+                current.push(file_info);
             }
         }
     }
-    let all_data: Vec<Fileinfo> = cachemap.into_values().collect();
-    if let Err(e) = save_cache(cache_file,&all_data) {
-        println!("Warning ! Error : {} ",e);
+    if let Err(e) = save_cache(cache_file, &updated_cache_entries) {
+        println!("Warning! Cache save error: {}", e);
     }
 
     if current.is_empty() {
-        println!("No files larger than {} bytes found.", min_size);
+        println!("No file named '{}' found.", search_file);
         return;
     }else {
-        println!("Found {} large files out of {} scanned:",current.len(),files_scanned);
-        for file in &current {
-            let date = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(file.date_modified);
-            println!("  {} ({} bytes, modified: {:?})", file.path, file.size, date);
+        println!("Found {} matching file(s) out of {} scanned:",current.len(),files_scanned);
+        for file in &current { 
+            let date = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(file.date_modified); 
+            println!(" {} ({} bytes, modified: {:?})", file.path, file.size, date);
         }
     }
     println!("===== Final Scan Statistic  =====");
@@ -158,33 +164,16 @@ fn main() {
         return;
     }
 
-    println!("Enter the size (eg:10Gb,20Mb,500Kb) : ");
-    let mut input_size = String::new();
-
-    io::stdin().read_line(&mut input_size).expect("Error Reading the size");
-    let num_part: String = input_size.chars().take_while(|c| c.is_numeric()).collect();
-    let unit_part: String = input_size.chars().skip_while(|c| c.is_numeric()).collect();
-    let unit_part = unit_part.trim();
-
-    let number:u64 = match num_part.parse() {
-        Ok(n) => n,
-        Err(_)=>{println!("Error : Invalid Number"); return;}
-        
-    };
-    
-    let size = match unit_part.to_lowercase().as_str(){
-        "gb" => number*1024*1024*1024,
-        "mb" => number*1024*1024,
-        "kb" => number*1024,
-        "" => number,
-        _ => {
-            println!("Error Invalid Unit");
-            return;
-        }
-    };
-
+    println!("Enter the file to search with extension : ");
+    let mut input_search = String::new();
+    io::stdin().read_line(&mut input_search).expect("Falied to read the File Name ");
+    let search = input_search.trim();
+    if search.is_empty() {
+        println!("Error : The search file cant be empty");
+        return;
+    }
     let start = Instant::now();
-    walk(path, size,filename);
+    walk(path, search,filename);
     let duration = start.elapsed();
     println!("Time taken: {:.2?} seconds",duration);
 }
